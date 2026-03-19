@@ -1,0 +1,36 @@
+name: xihe-inference
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy>=1.23,<2.0
+  - xarray>=2023.1
+  - netCDF4>=1.6
+  - h5netcdf>=1.1
+  - pyyaml>=6.0
+  - scipy>=1.10
+  - pandas=2.1.*
+  - psutil>=5.9
+  - cdo>=2.0
+  - python-cdo>=0.5
+  - eccodes>=2.30
+  - pip>=23.0
+  - libstdcxx-ng>=12
+  - libgcc-ng>=12
+  - pip:
+      - torch==2.1.0
+      - torchvision==0.16.0
+      - torchdata==0.7.0
+      - onnxruntime-gpu>=1.16.0
+      - copernicusmarine>=1.0.0
+      - ecmwf-api-client>=1.6.5
+      - zarr>=2.16.0
+      - cdsapi>=0.6.1
+      - s3fs>=2023.1
+      - boto3>=1.26
+      - matplotlib>=3.7
+      - pillow>=10.0
+      - tqdm>=4.65
+      - cfgrib>=0.9.10
