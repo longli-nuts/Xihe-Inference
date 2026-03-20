@@ -34,9 +34,9 @@ def save_file_to_s3(bucket_name, local_file_path, object_key):
         raise FileNotFoundError(f"Local file not found: {local_file_path}")
 
     config = TransferConfig(
-        multipart_threshold=1024 * 1024 * 500,
+        multipart_threshold=64 * 1024 * 1024,
+        multipart_chunksize=64 * 1024 * 1024,
         max_concurrency=1,
-        multipart_chunksize=1024 * 1024 * 500,
         use_threads=False,
     )
 
