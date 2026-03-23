@@ -5,6 +5,8 @@ import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import xarray as xr
+
 from model           import download_xihe_models
 from get_inits_cmems import fetch_marine_data, preprocess_to_npy
 from get_inits_wind  import get_ifs_wind
@@ -60,6 +62,18 @@ def build_s3_file_url(folder_url: str, file_name: str) -> str:
     return folder_url.rstrip("/") + "/" + file_name
 
 
+def extract_forecast_date_from_marine_file(marine_file: str):
+    # Read the forecast date from the last time value in a marine init NetCDF.
+    with xr.open_dataset(marine_file) as dataset:
+        return (
+            dataset.time.values[-1]
+            .astype("datetime64[D]")
+            .astype("datetime64[ms]")
+            .astype(datetime)
+            .date()
+        )
+
+
 def main():
     print("=" * 70)
     print(" " * 20 + "XIHE OCEAN FORECASTING")
@@ -70,30 +84,15 @@ def main():
 
     validate_environment(use_custom_init)
 
-    default_date_str  = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    forecast_date_str = os.environ.get("FORECAST_DATE", default_date_str)
-    try:
-        forecast_date = datetime.strptime(forecast_date_str, "%Y-%m-%d").date()
-    except ValueError:
-        print(f"[ERROR] FORECAST_DATE '{forecast_date_str}' must be YYYY-MM-DD")
-        sys.exit(1)
-
     print(f"Mode: {'CUSTOM' if use_custom_init else 'AUTO'}")
-    print(f"Forecast Date: {forecast_date}")
 
     bucket_name      = os.environ.get("AWS_BUCKET_NAME")
     s3_output_folder = os.environ.get("S3_OUTPUT_FOLDER", "xihe-forecasts")
-    forecast_start   = forecast_date + timedelta(days=1)
-    forecast_end     = forecast_date + timedelta(days=10)
-    zarr_name        = f"XIHE_MOI_{forecast_start}_{forecast_end}.zarr"
-
-    print(f"Output: s3://{bucket_name}/{s3_output_folder}/{forecast_date}/")
 
     work_dir        = Path(LOCAL_WORK_DIR)
     raw_data_dir    = work_dir / "raw_data"
     input_data_dir  = work_dir / "input_data"
     output_data_dir = work_dir / "output_data"
-    zarr_path       = work_dir / zarr_name
 
     for d in [raw_data_dir, input_data_dir, output_data_dir]:
         d.mkdir(parents=True, exist_ok=True)
@@ -126,9 +125,20 @@ def main():
             wind_init_url = build_s3_file_url(init_folder_url, WIND_INIT_FILE_NAME)
             marine_file = download_init_file(marine_init_url, custom_init_dir)
             wind_file = download_init_file(wind_init_url, custom_init_dir)
+            forecast_date = extract_forecast_date_from_marine_file(marine_file)
             print(f"[OK] Marine init: {marine_file}")
             print(f"[OK] Wind init:   {wind_file}")
         else:
+            forecast_date_str = os.environ.get("FORECAST_DATE")
+            if not forecast_date_str:
+                print("[ERROR] FORECAST_DATE is required in AUTO mode")
+                sys.exit(1)
+            try:
+                forecast_date = datetime.strptime(forecast_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                print(f"[ERROR] FORECAST_DATE '{forecast_date_str}' must be YYYY-MM-DD")
+                sys.exit(1)
+
             print("\n" + "=" * 70)
             print("STEP 3: Fetching Copernicus Marine (GLO12)")
             print("=" * 70)
@@ -146,6 +156,13 @@ def main():
                 output_dir=str(raw_data_dir / "ifs_wind"),
             )
             print(f"[OK] {wind_file}")
+
+        forecast_start   = forecast_date + timedelta(days=1)
+        forecast_end     = forecast_date + timedelta(days=10)
+        zarr_name        = f"XIHE_MOI_{forecast_start}_{forecast_end}.zarr"
+        zarr_path        = work_dir / zarr_name
+        print(f"Forecast Date: {forecast_date}")
+        print(f"Output: s3://{bucket_name}/{s3_output_folder}/{forecast_date}/")
 
         print("\n" + "=" * 70)
         print("STEP 5: Preprocessing to NPY")
