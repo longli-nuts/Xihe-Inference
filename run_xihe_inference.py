@@ -10,23 +10,32 @@ from get_inits_cmems import fetch_marine_data, preprocess_to_npy
 from get_inits_wind  import get_ifs_wind
 from xihe_forecast   import run_inference
 from utilities       import download_assets, cleanup_assets, npy_to_zarr, zarr_to_zip
-from s3_upload       import save_file_to_s3
+from s3_upload       import download_from_s3, save_file_to_s3
 from generate_thumbnails import generate_thumbnails
 
 
 LOCAL_WORK_DIR = os.environ.get("LOCAL_WORK_DIR", "/tmp/xihe")
+MARINE_INIT_FILE_NAME = "marine_init.nc"
+WIND_INIT_FILE_NAME = "wind_init.nc"
 
 
-def validate_environment():
+def validate_environment(use_custom_init: bool):
     # Check that all required environment variables are set.
     required = [
-        "COPERNICUSMARINE_SERVICE_USERNAME",
-        "COPERNICUSMARINE_SERVICE_PASSWORD",
         "AWS_BUCKET_NAME",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",
     ]
+    if not use_custom_init:
+        required.extend(
+            [
+                "COPERNICUSMARINE_SERVICE_USERNAME",
+                "COPERNICUSMARINE_SERVICE_PASSWORD",
+                "ECMWF_API_KEY",
+                "ECMWF_API_EMAIL",
+            ]
+        )
     missing = [v for v in required if not os.environ.get(v)]
     if missing:
         print("[ERROR] Missing required environment variables:")
@@ -35,12 +44,31 @@ def validate_environment():
         sys.exit(1)
 
 
+def download_init_file(init_url: str, local_dir: Path) -> str:
+    # Download a custom init file from S3 into the local work directory.
+    if not init_url.startswith("s3://"):
+        raise ValueError(f"Only s3:// URLs are supported for custom init files, got: {init_url}")
+
+    bucket_and_key = init_url[len("s3://"):]
+    bucket_name, object_key = bucket_and_key.split("/", 1)
+    local_path = local_dir / Path(object_key).name
+    return download_from_s3(bucket_name, object_key, str(local_path))
+
+
+def build_s3_file_url(folder_url: str, file_name: str) -> str:
+    # Build a file URL from a custom init folder URL and a fixed file name.
+    return folder_url.rstrip("/") + "/" + file_name
+
+
 def main():
     print("=" * 70)
     print(" " * 20 + "XIHE OCEAN FORECASTING")
     print("=" * 70)
 
-    validate_environment()
+    init_folder_url = os.environ.get("INIT_FILES_FOLDER_URL")
+    use_custom_init = bool(init_folder_url)
+
+    validate_environment(use_custom_init)
 
     default_date_str  = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     forecast_date_str = os.environ.get("FORECAST_DATE", default_date_str)
@@ -50,6 +78,7 @@ def main():
         print(f"[ERROR] FORECAST_DATE '{forecast_date_str}' must be YYYY-MM-DD")
         sys.exit(1)
 
+    print(f"Mode: {'CUSTOM' if use_custom_init else 'AUTO'}")
     print(f"Forecast Date: {forecast_date}")
 
     bucket_name      = os.environ.get("AWS_BUCKET_NAME")
@@ -87,23 +116,36 @@ def main():
             models_dir.mkdir(parents=True, exist_ok=True)
             download_xihe_models(str(models_dir))
 
-        print("\n" + "=" * 70)
-        print("STEP 3: Fetching Copernicus Marine (GLO12)")
-        print("=" * 70)
-        marine_file = fetch_marine_data(
-            forecast_date=forecast_date,
-            output_dir=str(raw_data_dir / "mkt_data"),
-        )
-        print(f"[OK] {marine_file}")
+        if use_custom_init:
+            print("\n" + "=" * 70)
+            print("STEP 3: Using custom init files")
+            print("=" * 70)
+            custom_init_dir = raw_data_dir / "custom_init"
+            custom_init_dir.mkdir(parents=True, exist_ok=True)
+            marine_init_url = build_s3_file_url(init_folder_url, MARINE_INIT_FILE_NAME)
+            wind_init_url = build_s3_file_url(init_folder_url, WIND_INIT_FILE_NAME)
+            marine_file = download_init_file(marine_init_url, custom_init_dir)
+            wind_file = download_init_file(wind_init_url, custom_init_dir)
+            print(f"[OK] Marine init: {marine_file}")
+            print(f"[OK] Wind init:   {wind_file}")
+        else:
+            print("\n" + "=" * 70)
+            print("STEP 3: Fetching Copernicus Marine (GLO12)")
+            print("=" * 70)
+            marine_file = fetch_marine_data(
+                forecast_date=forecast_date,
+                output_dir=str(raw_data_dir / "mkt_data"),
+            )
+            print(f"[OK] {marine_file}")
 
-        print("\n" + "=" * 70)
-        print("STEP 4: Fetching IFS wind forecast (ECMWF)")
-        print("=" * 70)
-        wind_file = get_ifs_wind(
-            forecast_date=forecast_date,
-            output_dir=str(raw_data_dir / "ifs_wind"),
-        )
-        print(f"[OK] {wind_file}")
+            print("\n" + "=" * 70)
+            print("STEP 4: Fetching IFS wind forecast (ECMWF)")
+            print("=" * 70)
+            wind_file = get_ifs_wind(
+                forecast_date=forecast_date,
+                output_dir=str(raw_data_dir / "ifs_wind"),
+            )
+            print(f"[OK] {wind_file}")
 
         print("\n" + "=" * 70)
         print("STEP 5: Preprocessing to NPY")

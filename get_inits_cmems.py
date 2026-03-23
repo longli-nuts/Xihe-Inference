@@ -1,5 +1,6 @@
 import os
 import time
+import subprocess
 import pathlib
 import multiprocessing
 import psutil
@@ -16,8 +17,8 @@ DATASETS = {
     "cmems_mod_glo_phy_anfc_0.083deg_P1D-m":        ["zos"],
 }
 
-DEPTH_MIN = 0.0
-DEPTH_MAX = 5727.917
+DEPTH_MIN = 0.49402499198913574
+DEPTH_MAX = 5727.9169921875
 LON_MIN   = -180.0
 LON_MAX   =  180.0
 LAT_MIN   = -80.0
@@ -68,15 +69,15 @@ def fetch_marine_data(forecast_date, output_dir):
             maximum_depth=depth_max,
             output_filename=str(tmp_file.name),
             output_directory=str(output_path),
-            force_download=True,
         )
         tmp_files.append(str(tmp_file))
         print(f"   [OK] {variables}")
 
     print(f"Merging {len(tmp_files)} files...")
-    datasets = [xr.open_dataset(f) for f in tmp_files]
-    merged   = xr.merge(datasets)
-    merged.to_netcdf(str(output_file))
+    merge_cmd = ["cdo", "-O", "merge", *tmp_files, str(output_file)]
+    result = subprocess.run(merge_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"CDO merge failed:\n{result.stderr}")
 
     for f in tmp_files:
         Path(f).unlink(missing_ok=True)
