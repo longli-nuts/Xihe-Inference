@@ -56,7 +56,7 @@ def generate_thumbnails(zarr_path, bucket_name, s3_prefix):
             buffer.seek(0)
             plt.close(fig)
 
-            object_prefix = s3_prefix.strip("/")
+            object_prefix = "/".join(part for part in s3_prefix.strip("/").split("/") if part)
             object_key = f"{object_prefix}/{var_name}.png" if object_prefix else f"{var_name}.png"
             s3_url = upload_bytes_to_s3(
                 bucket_name=bucket_name,

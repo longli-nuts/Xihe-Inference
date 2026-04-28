@@ -84,12 +84,22 @@ def s3_output_is_file_path(s3_output_folder: str):
     return output_value.endswith(".zarr.zip")
 
 
+def normalize_s3_key(*parts):
+    return "/".join(
+        segment
+        for part in parts
+        for segment in str(part).strip("/").split("/")
+        if segment
+    )
+
+
 def resolve_s3_output(aws_bucket_name: str, s3_output_folder: str, forecast_date, zip_name: str):
     # Resolve the final S3 upload target and the shared parent prefix for thumbnails.
     output_value = s3_output_folder.strip()
 
     if output_value.startswith("s3://"):
         output_value = output_value[len("s3://"):]
+    output_value = output_value.strip("/")
 
     if output_value.endswith(".zarr.zip"):
         if "/" not in output_value:
@@ -98,6 +108,7 @@ def resolve_s3_output(aws_bucket_name: str, s3_output_folder: str, forecast_date
                 "for example: bucket/path/forecast_date/output.zarr.zip"
             )
         bucket_name, file_key = output_value.split("/", 1)
+        file_key = normalize_s3_key(file_key)
         if "/" not in file_key:
             raise ValueError(
                 "S3_OUTPUT_FOLDER full file path must include a parent folder, "
@@ -106,8 +117,8 @@ def resolve_s3_output(aws_bucket_name: str, s3_output_folder: str, forecast_date
         output_prefix = file_key.rsplit("/", 1)[0]
         return bucket_name, file_key, output_prefix
 
-    output_prefix = f"{output_value.strip('/')}/{forecast_date}"
-    file_key = f"{output_prefix}/{zip_name}"
+    output_prefix = normalize_s3_key(output_value, forecast_date)
+    file_key = normalize_s3_key(output_prefix, zip_name)
     return aws_bucket_name, file_key, output_prefix
 
 
