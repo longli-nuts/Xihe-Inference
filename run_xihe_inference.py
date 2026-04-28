@@ -21,14 +21,15 @@ MARINE_INIT_FILE_NAME = "marine_init.nc"
 WIND_INIT_FILE_NAME = "wind_init.nc"
 
 
-def validate_environment(use_custom_init: bool):
+def validate_environment(use_custom_init: bool, require_aws_bucket_name: bool):
     # Check that all required environment variables are set.
     required = [
-        "AWS_BUCKET_NAME",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_SESSION_TOKEN",
     ]
+    if require_aws_bucket_name:
+        required.insert(0, "AWS_BUCKET_NAME")
     if not use_custom_init:
         required.extend(
             [
@@ -74,6 +75,42 @@ def extract_forecast_date_from_marine_file(marine_file: str):
         )
 
 
+def s3_output_is_file_path(s3_output_folder: str):
+    output_value = s3_output_folder.strip()
+
+    if output_value.startswith("s3://"):
+        output_value = output_value[len("s3://"):]
+
+    return output_value.endswith(".zarr.zip")
+
+
+def resolve_s3_output(aws_bucket_name: str, s3_output_folder: str, forecast_date, zip_name: str):
+    # Resolve the final S3 upload target and the shared parent prefix for thumbnails.
+    output_value = s3_output_folder.strip()
+
+    if output_value.startswith("s3://"):
+        output_value = output_value[len("s3://"):]
+
+    if output_value.endswith(".zarr.zip"):
+        if "/" not in output_value:
+            raise ValueError(
+                "S3_OUTPUT_FOLDER full file path must include bucket and key, "
+                "for example: bucket/path/forecast_date/output.zarr.zip"
+            )
+        bucket_name, file_key = output_value.split("/", 1)
+        if "/" not in file_key:
+            raise ValueError(
+                "S3_OUTPUT_FOLDER full file path must include a parent folder, "
+                "for example: bucket/path/forecast_date/output.zarr.zip"
+            )
+        output_prefix = file_key.rsplit("/", 1)[0]
+        return bucket_name, file_key, output_prefix
+
+    output_prefix = f"{output_value.strip('/')}/{forecast_date}"
+    file_key = f"{output_prefix}/{zip_name}"
+    return aws_bucket_name, file_key, output_prefix
+
+
 def main():
     print("=" * 70)
     print(" " * 20 + "XIHE OCEAN FORECASTING")
@@ -81,13 +118,16 @@ def main():
 
     init_folder_url = os.environ.get("INIT_FILES_FOLDER_URL")
     use_custom_init = bool(init_folder_url)
+    s3_output_folder = os.environ.get("S3_OUTPUT_FOLDER", "xihe-forecasts")
 
-    validate_environment(use_custom_init)
+    validate_environment(
+        use_custom_init,
+        require_aws_bucket_name=not s3_output_is_file_path(s3_output_folder),
+    )
 
     print(f"Mode: {'CUSTOM' if use_custom_init else 'AUTO'}")
 
     bucket_name      = os.environ.get("AWS_BUCKET_NAME")
-    s3_output_folder = os.environ.get("S3_OUTPUT_FOLDER", "xihe-forecasts")
 
     work_dir        = Path(LOCAL_WORK_DIR)
     raw_data_dir    = work_dir / "raw_data"
@@ -161,8 +201,15 @@ def main():
         forecast_end     = forecast_date + timedelta(days=10)
         zarr_name        = f"XIHE_MOI_{forecast_start}_{forecast_end}.zarr"
         zarr_path        = work_dir / zarr_name
+        zip_name         = f"{zarr_name}.zip"
+        output_bucket, file_key, output_prefix = resolve_s3_output(
+            aws_bucket_name=bucket_name,
+            s3_output_folder=s3_output_folder,
+            forecast_date=forecast_date,
+            zip_name=zip_name,
+        )
         print(f"Forecast Date: {forecast_date}")
-        print(f"Output: s3://{bucket_name}/{s3_output_folder}/{forecast_date}/")
+        print(f"Output: s3://{output_bucket}/{file_key}")
 
         print("\n" + "=" * 70)
         print("STEP 5: Preprocessing to NPY")
@@ -215,10 +262,8 @@ def main():
         print("\n" + "=" * 70)
         print("STEP 8: Uploading to S3")
         print("=" * 70)
-        zip_name   = f"{zarr_name}.zip"
-        file_key   = f"{s3_output_folder}/{forecast_date}/{zip_name}"
         result_url = save_file_to_s3(
-            bucket_name=bucket_name,
+            bucket_name=output_bucket,
             local_file_path=zip_path,
             object_key=file_key,
         )
@@ -228,11 +273,10 @@ def main():
         print("STEP 9: Generating thumbnails")
         print("=" * 70)
         try:
-            thumb_prefix   = f"{s3_output_folder}/{forecast_date}/thumbnails"
             thumbnail_urls = generate_thumbnails(
                 zarr_path=zip_path,
-                bucket_name=bucket_name,
-                s3_prefix=thumb_prefix,
+                bucket_name=output_bucket,
+                s3_prefix=output_prefix,
             )
             print(f"[OK] {len(thumbnail_urls)} thumbnails")
         except Exception as e:
