@@ -14,6 +14,7 @@ from xihe_forecast   import run_inference
 from utilities       import download_assets, cleanup_assets, npy_to_zarr
 from s3_upload       import download_from_s3, save_directory_to_s3
 from generate_thumbnails import generate_thumbnails
+from add_metadata    import add_metadata_to_zarr
 
 
 LOCAL_WORK_DIR = os.environ.get("LOCAL_WORK_DIR", "/tmp/xihe")
@@ -264,7 +265,12 @@ def main():
             print(f"  [OK] Day {lead_day}")
 
         print("\n" + "=" * 70)
-        print("STEP 7: Uploading to S3")
+        print("STEP 7: Adding metadata")
+        print("=" * 70)
+        add_metadata_to_zarr(zarr_path)
+
+        print("\n" + "=" * 70)
+        print("STEP 8: Uploading to S3")
         print("=" * 70)
         result_url = save_directory_to_s3(
             bucket_name=output_bucket,
@@ -274,7 +280,7 @@ def main():
         print(f"[OK] {result_url}")
 
         print("\n" + "=" * 70)
-        print("STEP 8: Generating thumbnails")
+        print("STEP 9: Generating thumbnails")
         print("=" * 70)
         try:
             thumbnail_urls = generate_thumbnails(

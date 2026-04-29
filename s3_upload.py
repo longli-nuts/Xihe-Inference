@@ -1,10 +1,13 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import boto3
 from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
 
+
+MAX_UPLOAD_WORKDERS = int(os.environ.get("S3_UPLOAD_WORKERS", "32"))
 
 def get_s3_endpoint_url_with_protocol():
     # Return the S3 endpoint URL with https:// prefix if missing.
@@ -68,13 +71,26 @@ def save_directory_to_s3(bucket_name, local_dir_path, object_prefix):
         raise RuntimeError(f"No files found in local directory: {local_dir_path}")
 
     total_size_mb = sum(path.stat().st_size for path in files) / 1e6
-    print(f"Uploading directory: {local_dir.name} ({len(files)} files, {total_size_mb:.2f} MB)")
+    print(
+        f"Uploading directory: {local_dir.name} "
+        f"({len(files)} files, {total_size_mb:.2f} MB, {MAX_UPLOAD_WORKDERS} workers)"
+    )
 
     object_prefix = str(object_prefix).strip("/")
-    for path in files:
+
+    def upload_one(path):
         relative_key = path.relative_to(local_dir).as_posix()
         object_key = f"{object_prefix}/{relative_key}" if object_prefix else relative_key
         s3_client.upload_file(str(path), bucket_name, object_key, Config=config)
+
+    uploaded = 0
+    with ThreadPoolExecutor(max_workers=MAX_UPLOAD_WORKDERS) as executor:
+        futures = [executor.submit(upload_one, path) for path in files]
+        for future in as_completed(futures):
+            future.result()
+            uploaded += 1
+            if uploaded % 1000 == 0 or uploaded == len(files):
+                print(f"  Uploaded {uploaded}/{len(files)} files")
 
     s3_url = f"s3://{bucket_name}/{object_prefix}"
     print(f"[OK] {s3_url}")
