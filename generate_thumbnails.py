@@ -4,72 +4,87 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
+from PIL import Image
 
 from s3_upload import upload_bytes_to_s3
 
 
+THUMBNAIL_SETTINGS = {
+    "zos":    {"lead": 9, "cmap": "seismic"},
+    "thetao": {"lead": 9, "depth": 0, "cmap": "viridis"},
+    "so":     {"lead": 9, "depth": 0, "cmap": "jet"},
+    "uo":     {"lead": 2, "depth": 0, "cmap": "coolwarm"},
+    "vo":     {"lead": 2, "depth": 0, "cmap": "coolwarm"},
+}
+
+
+def _isel_existing(data_array, **indexers):
+    valid_indexers = {}
+    for dim, index in indexers.items():
+        if dim in data_array.dims:
+            dim_size = data_array.sizes[dim]
+            valid_indexers[dim] = min(index, dim_size - 1)
+    return data_array.isel(**valid_indexers)
+
+
+def _render_png(data_array, cmap_name):
+    values = data_array.values
+    vmin = np.nanmin(values)
+    vmax = np.nanmax(values)
+
+    if vmax == vmin:
+        normalized = np.zeros_like(values, dtype=np.uint8)
+    else:
+        normalized = ((values - vmin) / (vmax - vmin) * 255)
+        normalized = np.nan_to_num(normalized, nan=0).astype(np.uint8)
+
+    cmap = plt.get_cmap(cmap_name)
+    colored = cmap(normalized)
+    colored[..., 3] = np.where(np.isnan(values), 0, 255).astype(np.uint8) / 255.0
+    rgba = (colored * 255).astype(np.uint8)
+
+    buffer = io.BytesIO()
+    Image.fromarray(rgba, mode="RGBA").save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def generate_thumbnails(zarr_path, bucket_name, s3_prefix):
-    # Generate PNG thumbnails for all ocean variables at day 1 and upload them to S3.
+    # Generate PNG thumbnails for all ocean variables and upload them to S3.
     print(f"Generating thumbnails from: {Path(zarr_path).name}")
 
     ds = xr.open_zarr(zarr_path)
-
-    variables = {
-        "zos":    {"title": "Sea Surface Height",           "cmap": "RdBu_r",   "units": "m"},
-        "thetao": {"title": "Temperature (Surface)",        "cmap": "RdYlBu_r", "units": "°C"},
-        "so":     {"title": "Salinity (Surface)",           "cmap": "viridis",  "units": "PSU"},
-        "uo":     {"title": "Eastward Velocity (Surface)",  "cmap": "RdBu_r",   "units": "m/s"},
-        "vo":     {"title": "Northward Velocity (Surface)", "cmap": "RdBu_r",   "units": "m/s"},
-    }
-
     thumbnail_urls = {}
 
-    for var_name, config in variables.items():
-        if var_name not in ds:
-            print(f"  [WARNING] {var_name} not found, skipping")
-            continue
+    try:
+        for var_name, config in THUMBNAIL_SETTINGS.items():
+            if var_name not in ds:
+                print(f"  [WARNING] {var_name} not found, skipping")
+                continue
 
-        try:
-            data = ds[var_name].isel(time=0)
-            if "depth" in data.dims:
-                data = data.isel(depth=0)
+            try:
+                data = _isel_existing(
+                    ds[var_name],
+                    time=config["lead"],
+                    depth=config.get("depth", 0),
+                )
+                png_bytes = _render_png(data, config["cmap"])
 
-            lat = data.latitude if "latitude" in data.dims else data.lat
-            lon = data.longitude if "longitude" in data.dims else data.lon
+                object_prefix = "/".join(part for part in s3_prefix.strip("/").split("/") if part)
+                object_key = f"{object_prefix}/{var_name}.png" if object_prefix else f"{var_name}.png"
+                s3_url = upload_bytes_to_s3(
+                    bucket_name=bucket_name,
+                    data_bytes=png_bytes,
+                    object_key=object_key,
+                    content_type="image/png",
+                )
+                thumbnail_urls[var_name] = s3_url
+                print(f"  [OK] {var_name}.png -> {s3_url}")
 
-            fig, ax = plt.subplots(figsize=(12, 6), dpi=100)
-            vmin, vmax = np.nanpercentile(data.values, [2, 98])
+            except Exception as e:
+                print(f"  [WARNING] Failed for {var_name}: {e}")
+    finally:
+        ds.close()
 
-            im = ax.pcolormesh(lon, lat, data.values, cmap=config["cmap"],
-                               vmin=vmin, vmax=vmax, shading="auto")
-            ax.set_xlabel("Longitude")
-            ax.set_ylabel("Latitude")
-            ax.set_title(f"{config['title']} - Day 1 Forecast", fontsize=14, fontweight="bold")
-
-            cbar = plt.colorbar(im, ax=ax, orientation="horizontal", pad=0.05, aspect=40)
-            cbar.set_label(config["units"], fontsize=10)
-            ax.set_aspect("auto")
-            plt.tight_layout()
-
-            buffer = io.BytesIO()
-            plt.savefig(buffer, format="png", bbox_inches="tight", dpi=100)
-            buffer.seek(0)
-            plt.close(fig)
-
-            object_prefix = "/".join(part for part in s3_prefix.strip("/").split("/") if part)
-            object_key = f"{object_prefix}/{var_name}.png" if object_prefix else f"{var_name}.png"
-            s3_url = upload_bytes_to_s3(
-                bucket_name=bucket_name,
-                data_bytes=buffer.getvalue(),
-                object_key=object_key,
-                content_type="image/png",
-            )
-            thumbnail_urls[var_name] = s3_url
-            print(f"  [OK] {var_name}.png -> {s3_url}")
-
-        except Exception as e:
-            print(f"  [WARNING] Failed for {var_name}: {e}")
-
-    ds.close()
     print(f"[OK] {len(thumbnail_urls)} thumbnails generated")
     return thumbnail_urls
