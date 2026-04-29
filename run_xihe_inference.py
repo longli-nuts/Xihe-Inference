@@ -11,8 +11,8 @@ from model           import download_xihe_models
 from get_inits_cmems import fetch_marine_data, preprocess_to_npy
 from get_inits_wind  import get_ifs_wind
 from xihe_forecast   import run_inference
-from utilities       import download_assets, cleanup_assets, npy_to_zarr, zarr_to_zip
-from s3_upload       import download_from_s3, save_file_to_s3
+from utilities       import download_assets, cleanup_assets, npy_to_zarr
+from s3_upload       import download_from_s3, save_directory_to_s3
 from generate_thumbnails import generate_thumbnails
 
 
@@ -81,7 +81,7 @@ def s3_output_is_file_path(s3_output_folder: str):
     if output_value.startswith("s3://"):
         output_value = output_value[len("s3://"):]
 
-    return output_value.endswith(".zarr.zip")
+    return output_value.endswith(".zarr")
 
 
 def normalize_s3_key(*parts):
@@ -93,7 +93,7 @@ def normalize_s3_key(*parts):
     )
 
 
-def resolve_s3_output(aws_bucket_name: str, s3_output_folder: str, forecast_date, zip_name: str):
+def resolve_s3_output(aws_bucket_name: str, s3_output_folder: str, forecast_date, zarr_name: str):
     # Resolve the final S3 upload target and the shared parent prefix for thumbnails.
     output_value = s3_output_folder.strip()
 
@@ -101,24 +101,24 @@ def resolve_s3_output(aws_bucket_name: str, s3_output_folder: str, forecast_date
         output_value = output_value[len("s3://"):]
     output_value = output_value.strip("/")
 
-    if output_value.endswith(".zarr.zip"):
+    if output_value.endswith(".zarr"):
         if "/" not in output_value:
             raise ValueError(
                 "S3_OUTPUT_FOLDER full file path must include bucket and key, "
-                "for example: bucket/path/forecast_date/output.zarr.zip"
+                "for example: bucket/path/forecast_date/output.zarr"
             )
         bucket_name, file_key = output_value.split("/", 1)
         file_key = normalize_s3_key(file_key)
         if "/" not in file_key:
             raise ValueError(
                 "S3_OUTPUT_FOLDER full file path must include a parent folder, "
-                "for example: bucket/path/forecast_date/output.zarr.zip"
+                "for example: bucket/path/forecast_date/output.zarr"
             )
         output_prefix = file_key.rsplit("/", 1)[0]
         return bucket_name, file_key, output_prefix
 
     output_prefix = normalize_s3_key(output_value, forecast_date)
-    file_key = normalize_s3_key(output_prefix, zip_name)
+    file_key = normalize_s3_key(output_prefix, zarr_name)
     return aws_bucket_name, file_key, output_prefix
 
 
@@ -212,12 +212,11 @@ def main():
         forecast_end     = forecast_date + timedelta(days=10)
         zarr_name        = f"XIHE_MOI_{forecast_start}_{forecast_end}.zarr"
         zarr_path        = work_dir / zarr_name
-        zip_name         = f"{zarr_name}.zip"
         output_bucket, file_key, output_prefix = resolve_s3_output(
             aws_bucket_name=bucket_name,
             s3_output_folder=s3_output_folder,
             forecast_date=forecast_date,
-            zip_name=zip_name,
+            zarr_name=zarr_name,
         )
         print(f"Forecast Date: {forecast_date}")
         print(f"Output: s3://{output_bucket}/{file_key}")
@@ -265,27 +264,21 @@ def main():
             print(f"  [OK] Day {lead_day}")
 
         print("\n" + "=" * 70)
-        print("STEP 7: Converting Zarr to zip")
+        print("STEP 7: Uploading to S3")
         print("=" * 70)
-        zip_path = str(zarr_path) + ".zip"
-        zarr_to_zip(str(zarr_path), zip_path)
-
-        print("\n" + "=" * 70)
-        print("STEP 8: Uploading to S3")
-        print("=" * 70)
-        result_url = save_file_to_s3(
+        result_url = save_directory_to_s3(
             bucket_name=output_bucket,
-            local_file_path=zip_path,
-            object_key=file_key,
+            local_dir_path=zarr_path,
+            object_prefix=file_key,
         )
         print(f"[OK] {result_url}")
 
         print("\n" + "=" * 70)
-        print("STEP 9: Generating thumbnails")
+        print("STEP 8: Generating thumbnails")
         print("=" * 70)
         try:
             thumbnail_urls = generate_thumbnails(
-                zarr_path=zip_path,
+                zarr_path=zarr_path,
                 bucket_name=output_bucket,
                 s3_prefix=output_prefix,
             )

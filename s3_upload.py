@@ -48,6 +48,39 @@ def save_file_to_s3(bucket_name, local_file_path, object_key):
     return s3_url
 
 
+def save_directory_to_s3(bucket_name, local_dir_path, object_prefix):
+    # Upload a local directory tree to S3 under object_prefix.
+    s3_client = get_s3_client()
+    local_dir = Path(local_dir_path)
+
+    if not local_dir.is_dir():
+        raise FileNotFoundError(f"Local directory not found: {local_dir_path}")
+
+    config = TransferConfig(
+        multipart_threshold=64 * 1024 * 1024,
+        multipart_chunksize=64 * 1024 * 1024,
+        max_concurrency=1,
+        use_threads=False,
+    )
+
+    files = [path for path in sorted(local_dir.rglob("*")) if path.is_file()]
+    if not files:
+        raise RuntimeError(f"No files found in local directory: {local_dir_path}")
+
+    total_size_mb = sum(path.stat().st_size for path in files) / 1e6
+    print(f"Uploading directory: {local_dir.name} ({len(files)} files, {total_size_mb:.2f} MB)")
+
+    object_prefix = str(object_prefix).strip("/")
+    for path in files:
+        relative_key = path.relative_to(local_dir).as_posix()
+        object_key = f"{object_prefix}/{relative_key}" if object_prefix else relative_key
+        s3_client.upload_file(str(path), bucket_name, object_key, Config=config)
+
+    s3_url = f"s3://{bucket_name}/{object_prefix}"
+    print(f"[OK] {s3_url}")
+    return s3_url
+
+
 def upload_bytes_to_s3(bucket_name, data_bytes, object_key, content_type="application/octet-stream"):
     # Upload raw bytes directly to S3 (used for thumbnails).
     s3_client = get_s3_client()
