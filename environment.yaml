@@ -20,6 +20,7 @@ dependencies:
   - libstdcxx-ng>=12
   - libgcc-ng>=12
   - pip:
+      - numpy<2.0
       - torch==2.1.0
       - torchvision==0.16.0
       - torchdata==0.7.0

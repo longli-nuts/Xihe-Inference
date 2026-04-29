@@ -15,5 +15,6 @@ COPY ./utilities.py .
 COPY ./xihe_forecast.py .
 COPY ./s3_upload.py .
 COPY ./generate_thumbnails.py .
+COPY ./add_metadata.py .
 
 CMD ["python", "run_xihe_inference.py"]
