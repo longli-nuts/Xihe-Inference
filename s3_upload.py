@@ -8,6 +8,33 @@ from botocore.exceptions import ClientError
 
 
 MAX_UPLOAD_WORKDERS = int(os.environ.get("S3_UPLOAD_WORKERS", "32"))
+SUCCESS_MARKER = "_SUCCESS"
+
+
+def delete_s3_prefix(bucket_name, object_prefix):
+    # Delete all objects under an S3 prefix.
+    s3_client = get_s3_client()
+    object_prefix = str(object_prefix).strip("/")
+    if not object_prefix:
+        raise ValueError("Refusing to delete an empty S3 prefix")
+
+    paginator = s3_client.get_paginator("list_objects_v2")
+    deleted_count = 0
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=f"{object_prefix}/"):
+        objects = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+        if not objects:
+            continue
+        for chunk_start in range(0, len(objects), 1000):
+            chunk = objects[chunk_start:chunk_start + 1000]
+            s3_client.delete_objects(
+                Bucket=bucket_name,
+                Delete={"Objects": chunk, "Quiet": True},
+            )
+            deleted_count += len(chunk)
+
+    if deleted_count:
+        print(f"Deleted existing S3 prefix: s3://{bucket_name}/{object_prefix}/ ({deleted_count} objects)")
+
 
 def get_s3_endpoint_url_with_protocol():
     # Return the S3 endpoint URL with https:// prefix if missing.
@@ -77,6 +104,8 @@ def save_directory_to_s3(bucket_name, local_dir_path, object_prefix):
     )
 
     object_prefix = str(object_prefix).strip("/")
+    delete_s3_prefix(bucket_name, object_prefix)
+    success_key = f"{object_prefix}/{SUCCESS_MARKER}" if object_prefix else SUCCESS_MARKER
 
     def upload_one(path):
         relative_key = path.relative_to(local_dir).as_posix()
@@ -91,6 +120,14 @@ def save_directory_to_s3(bucket_name, local_dir_path, object_prefix):
             uploaded += 1
             if uploaded % 1000 == 0 or uploaded == len(files):
                 print(f"  Uploaded {uploaded}/{len(files)} files")
+
+    s3_client.put_object(
+        Bucket=bucket_name,
+        Key=success_key,
+        Body=b"",
+        ContentType="text/plain",
+    )
+    print(f"[OK] Ready marker: s3://{bucket_name}/{success_key}")
 
     s3_url = f"s3://{bucket_name}/{object_prefix}"
     print(f"[OK] {s3_url}")
