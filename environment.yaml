@@ -33,5 +33,6 @@ dependencies:
       - boto3>=1.26
       - matplotlib>=3.7
       - pillow>=10.0
+      - rioxarray>=0.15
       - tqdm>=4.65
       - cfgrib>=0.9.10

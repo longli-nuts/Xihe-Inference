@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
+import rioxarray  # noqa: F401 - registers the .rio accessor on xarray objects
 from PIL import Image
 
 from s3_upload import upload_bytes_to_s3
@@ -28,6 +29,11 @@ def _isel_existing(data_array, **indexers):
 
 
 def _render_png(data_array, cmap_name):
+    data_array = (
+        data_array.rio.set_spatial_dims(x_dim="longitude", y_dim="latitude")
+        .rio.write_crs("EPSG:4326")
+        .rio.reproject("EPSG:4326")
+    )
     values = data_array.values
     vmin = np.nanmin(values)
     vmax = np.nanmax(values)
